@@ -1,5 +1,5 @@
 import type { Session, StoreId } from "../core/types.js";
-import { PlaywrightBridge } from "./playwrightBridge.js";
+import { sharedPlaywrightBridge } from "./playwrightBridge.js";
 
 /**
  * Puente de navegador para cadenas SSR (Next.js) protegidas por antibot
@@ -75,7 +75,7 @@ export function getConfiguredBrowserBridge(): SsrBrowserBridge | undefined {
   const headless = /^(1|true|yes)$/i.test(
     process.env.SUPERMERCADOS_PLAYWRIGHT_HEADLESS?.trim() ?? ""
   );
-  cached = new PlaywrightBridge({
+  cached = sharedPlaywrightBridge({
     userDataDir,
     ...(channel ? { channel } : {}),
     headless,

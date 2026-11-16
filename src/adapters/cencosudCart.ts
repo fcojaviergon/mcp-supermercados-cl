@@ -75,7 +75,9 @@ export function cartItemToProduct(raw: RawCartItem, store: StoreId): Product | n
     ...(memberPrice !== undefined ? { memberPrice } : {}),
     ...(unitPrice !== undefined ? { unitPrice } : {}),
     ...(unit ? { unit } : {}),
-    inStock: raw.status !== "unavailable",
+    // Jumbo usa "available" y "without_stock" (verificado 2026-11-16); antes se
+    // comparaba contra "unavailable", que el BFF no emite.
+    inStock: raw.status === undefined || raw.status === "available",
     fetchedAt: new Date().toISOString(),
   };
 }
@@ -110,6 +112,20 @@ export function parseCart(raw: unknown, store: StoreId): Cart {
 
   const itemsQuantity = cart.itemsQuantity ?? items.reduce((s, l) => s + l.quantity, 0);
 
+  // Ítems sin precio (sin stock en la sucursal): antes se descartaban en
+  // silencio y el carro parecía tener menos productos de los que el usuario
+  // agregó. Se reportan aparte.
+  const unavailable = rawItems
+    .filter(
+      (it) => (it.skuId ?? it.productId) && it.name && !cartItemToProduct(it, store)
+    )
+    .map((it) => ({
+      id: String(it.skuId ?? it.productId),
+      name: String(it.name),
+      quantity: Math.max(1, Math.round(it.quantity ?? 1)),
+      status: typeof it.status === "string" ? it.status : "sin_precio",
+    }));
+
   return {
     store,
     items,
@@ -118,6 +134,7 @@ export function parseCart(raw: unknown, store: StoreId): Cart {
     total,
     savings,
     ...(primeSavings !== undefined ? { primeSavings } : {}),
+    ...(unavailable.length ? { unavailable } : {}),
   };
 }
 

@@ -196,6 +196,21 @@ export const CartSchema = z.object({
   savings: z.number().int().nonnegative(),
   /** Parte del ahorro atribuible al beneficio socio Prime, si aplica */
   primeSavings: z.number().int().nonnegative().optional(),
+  /**
+   * Líneas que están en el carro pero no se pueden comprar en la sucursal
+   * (Jumbo las deja con `status: "without_stock"` y sin precio). No suman al
+   * total; se exponen para avisar al usuario en vez de esconderlas.
+   */
+  unavailable: z
+    .array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        quantity: z.number().int().positive(),
+        status: z.string(),
+      })
+    )
+    .optional(),
 });
 export type Cart = z.infer<typeof CartSchema>;
 

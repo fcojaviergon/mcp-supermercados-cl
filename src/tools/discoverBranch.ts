@@ -1,6 +1,10 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { jumboDiscoverBranchSnippet } from "../adapters/cencosudBrowser.js";
+import {
+  discoverJumboBranch,
+  getConfiguredSessionExecutor,
+} from "../adapters/jumboSessionExec.js";
 
 /**
  * Descubre la sucursal (branchId) del usuario sin pedirle el código técnico.
@@ -18,7 +22,8 @@ export function registerDiscoverBranch(server: McpServer): void {
         'Obtiene el código de sucursal (branchId, ej. "jumboclj512") leyéndolo del navegador, para no ' +
         "pedírselo al usuario. Devuelve un `browserSnippet` para ejecutar en www.jumbo.cl (con la comuna/tienda " +
         "ya elegida). El snippet retorna { found, branchId } o, si no hay tienda elegida, { found:false, hint }. " +
-        "Pasa ese resultado en `discovered` para que la tool lo valide y te confirme el branchId a usar.",
+        "Pasa ese resultado en `discovered` para que la tool lo valide y te confirme el branchId a usar. " +
+        "Con el puente Playwright de sesión configurado (solo jumbo), lo lee directo sin snippet.",
       inputSchema: {
         store: z
           .enum(["jumbo", "santaisabel"])
@@ -33,6 +38,14 @@ export function registerDiscoverBranch(server: McpServer): void {
       },
     },
     async ({ store, discovered }) => {
+      const exec = store === "jumbo" ? getConfiguredSessionExecutor() : undefined;
+      if (discovered === undefined && exec) {
+        try {
+          discovered = await discoverJumboBranch(exec);
+        } catch {
+          // El puente falló: cae al flujo manual con el snippet.
+        }
+      }
       if (discovered === undefined) {
         return {
           content: [

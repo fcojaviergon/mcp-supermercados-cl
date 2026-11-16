@@ -49,6 +49,7 @@ interface PlaywrightContext {
   close: () => Promise<void>;
 }
 interface PlaywrightPage {
+  close: () => Promise<void>;
   goto: (url: string, opts?: Record<string, unknown>) => Promise<unknown>;
   evaluate: <T>(fn: string) => Promise<T>;
   content: () => Promise<string>;
@@ -117,6 +118,12 @@ export class PlaywrightBridge implements BrowserBridge {
         const pw = await loadPlaywright();
         return pw.chromium.launchPersistentContext(this.opts.userDataDir, {
           headless: this.opts.headless ?? false,
+          // Playwright instala sus propios handlers de señales y con ellos el
+          // proceso del server quedaba vivo tras SIGTERM (verificado). El cierre
+          // lo maneja el server con closeAllPlaywrightBridges().
+          handleSIGINT: false,
+          handleSIGTERM: false,
+          handleSIGHUP: false,
           ...(this.opts.channel ? { channel: this.opts.channel } : {}),
         });
       })();
@@ -136,21 +143,36 @@ export class PlaywrightBridge implements BrowserBridge {
    * BFF. El snippet suele terminar en una expresión `await fetch(...)`.
    */
   async evaluate<T>(pageUrl: string, snippet: string): Promise<T> {
+    const url = pageUrl.startsWith("http") ? pageUrl : this.baseUrl() + pageUrl;
+    return this.withPage(async (page) => {
+      await page.goto(url, { waitUntil: "domcontentloaded" });
+      // El snippet usa top-level await; lo envolvemos en una IIFE async.
+      return page.evaluate<T>(`(async () => { return (${snippet}); })()`);
+    });
+  }
+
+  /**
+   * Abre una pestaña, corre `fn` y la cierra SIEMPRE. Antes cada llamada dejaba
+   * su pestaña abierta: con el contexto vivo mientras corre el server, una
+   * sesión larga acumulaba decenas de pestañas (y su memoria) en el navegador.
+   */
+  private async withPage<T>(fn: (page: PlaywrightPage) => Promise<T>): Promise<T> {
     const ctx = await this.ensureContext();
     const page = await ctx.newPage();
-    const url = pageUrl.startsWith("http") ? pageUrl : this.baseUrl() + pageUrl;
-    await page.goto(url, { waitUntil: "domcontentloaded" });
-    // El snippet usa top-level await; lo envolvemos en una IIFE async.
-    return page.evaluate<T>(`(async () => { return (${snippet}); })()`);
+    try {
+      return await fn(page);
+    } finally {
+      await page.close().catch(() => {});
+    }
   }
 
   /** HTML autenticado de una ruta (implementa BrowserBridge). */
   async fetchAuthedHtml(path: string): Promise<string> {
-    const ctx = await this.ensureContext();
-    const page = await ctx.newPage();
     const url = path.startsWith("http") ? path : this.baseUrl() + path;
-    await page.goto(url, { waitUntil: "domcontentloaded" });
-    return page.content();
+    return this.withPage(async (page) => {
+      await page.goto(url, { waitUntil: "domcontentloaded" });
+      return page.content();
+    });
   }
 
   /**
@@ -170,22 +192,22 @@ export class PlaywrightBridge implements BrowserBridge {
    *    es invisible → timeout eterno. Hay que pedir `state: "attached"`.
    */
   async fetchSsrHtml(url: string, timeoutMs = 20_000): Promise<string> {
-    const ctx = await this.ensureContext();
-    const page = await ctx.newPage();
     const full = url.startsWith("http") ? url : this.baseUrl() + url;
-    await page.goto(full, { waitUntil: "domcontentloaded", timeout: timeoutMs });
-    // Si el selector no aparece (bloqueo persistente), devolvemos lo que haya:
-    // el adaptador ya distingue el HTML de bloqueo (isLiderBlockedHtml) y lanza
-    // un error accionable, mejor que colgarse esperando el selector.
-    try {
-      await page.waitForSelector('script[id="__NEXT_DATA__"]', {
-        state: "attached",
-        timeout: timeoutMs,
-      });
-    } catch {
-      // sin __NEXT_DATA__: cae al manejo de bloqueo del adaptador.
-    }
-    return page.content();
+    return this.withPage(async (page) => {
+      await page.goto(full, { waitUntil: "domcontentloaded", timeout: timeoutMs });
+      // Si el selector no aparece (bloqueo persistente), devolvemos lo que haya:
+      // el adaptador ya distingue el HTML de bloqueo (isLiderBlockedHtml) y lanza
+      // un error accionable, mejor que colgarse esperando el selector.
+      try {
+        await page.waitForSelector('script[id="__NEXT_DATA__"]', {
+          state: "attached",
+          timeout: timeoutMs,
+        });
+      } catch {
+        // sin __NEXT_DATA__: cae al manejo de bloqueo del adaptador.
+      }
+      return page.content();
+    });
   }
 
   async close(): Promise<void> {
@@ -193,4 +215,33 @@ export class PlaywrightBridge implements BrowserBridge {
     this.contextPromise = undefined;
     if (p) await (await p).close().catch(() => {});
   }
+}
+
+// --- Un navegador por perfil ---
+
+const sharedBridges = new Map<string, PlaywrightBridge>();
+
+/**
+ * Devuelve EL puente de un perfil, creándolo la primera vez. El puente de
+ * búsqueda (Líder/Tottus) y el de sesión (carro de Jumbo) pueden apuntar al
+ * mismo `userDataDir`; si cada uno lanzara su propio `launchPersistentContext`,
+ * el segundo chocaría con el lock exclusivo del perfil. Compartiendo la
+ * instancia, ambos usan el mismo navegador. Las opciones de la primera llamada
+ * mandan (canal, headless).
+ */
+export function sharedPlaywrightBridge(
+  opts: PlaywrightBridgeOptions
+): PlaywrightBridge {
+  const existing = sharedBridges.get(opts.userDataDir);
+  if (existing) return existing;
+  const bridge = new PlaywrightBridge(opts);
+  sharedBridges.set(opts.userDataDir, bridge);
+  return bridge;
+}
+
+/** Cierra todos los navegadores abiertos por el server (al apagarse). */
+export async function closeAllPlaywrightBridges(): Promise<void> {
+  const bridges = [...sharedBridges.values()];
+  sharedBridges.clear();
+  await Promise.all(bridges.map((b) => b.close()));
 }

@@ -4,6 +4,44 @@ Todas las versiones notables de `mcp-supermercados-cl`. El formato sigue
 [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el proyecto usa
 [SemVer](https://semver.org/lang/es/).
 
+## [Unreleased]
+
+### Added
+
+- **Carro automático de Jumbo con Playwright (puente de sesión).** Con
+  `SUPERMERCADOS_SESSION_PROFILE` configurado, `add_to_cart`, `get_cart` y
+  `discover_branch` se ejecutan solos en un perfil de Chrome dedicado donde el
+  usuario inició sesión una vez (`npm run session:login`), con los mismos
+  snippets de producción del flujo manual. `add_to_cart` responde
+  `executed: true, via: "playwright"` con el carro que devolvió Jumbo, y
+  `branchId` pasa a ser opcional (se toma de la sesión). Si el puente falla, la
+  tool devuelve `bridgeError` con el siguiente paso y cae al snippet manual. El
+  servidor sigue sin ver el token. Nuevo módulo `src/adapters/jumboSessionExec.ts`.
+- `SUPERMERCADOS_PLAYWRIGHT_CHANNEL=chromium` para usar el Chromium de
+  Playwright en máquinas sin Google Chrome (server y `session:login`).
+
+### Fixed
+
+- **El puente Playwright dejaba una pestaña abierta por cada llamada.** Con el
+  navegador vivo mientras corre el server, una sesión larga acumulaba pestañas.
+  Ahora se cierran siempre al terminar.
+- El puente de búsqueda (Líder/Tottus) y el de sesión comparten el navegador si
+  apuntan al mismo perfil, en vez de chocar por su lock.
+- `session:login` encuentra Playwright instalado global vía
+  `SUPERMERCADOS_PLAYWRIGHT_PATH`, igual que el server.
+- **El carro escondía los productos sin stock.** Jumbo deja en el carro los
+  productos sin stock en la sucursal con `status: "without_stock"` y sin
+  precio, y `parseCart` los descartaba en silencio: el carro parecía tener
+  menos productos de los agregados (7 de 33 en la primera prueba real). Ahora
+  `Cart.unavailable` los lista, y `add_to_cart` agrega `attention` para que el
+  modelo avise y ofrezca reemplazos. `inStock` comparaba contra `"unavailable"`,
+  un estado que el BFF no emite.
+- **`add_to_cart` devolvía un carro vacío con total 0** al ejecutar el PATCH:
+  esa respuesta trae el conteo pero no el detalle. Ahora relee el carro con GET.
+- **El server quedaba vivo al cerrar el cliente** si había abierto Playwright
+  (sus handlers de señales impedían salir). Ahora se apaga al cerrarse stdin o
+  con SIGINT/SIGTERM/SIGHUP y cierra los navegadores.
+
 ## [1.4.9] - 2026-10-16
 
 Correcciones de documentación y de los mensajes de error, a partir del análisis

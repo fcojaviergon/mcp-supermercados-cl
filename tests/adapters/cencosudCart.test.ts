@@ -128,3 +128,36 @@ describe("CencosudAdapter · carro (puente de sesión)", () => {
     ).rejects.toThrow(/branchId/);
   });
 });
+
+describe("parseCart con productos sin stock", () => {
+  it("reporta en unavailable los ítems sin precio en vez de esconderlos", () => {
+    const raw = {
+      items: [
+        ...rawCart.items,
+        {
+          skuId: "139686",
+          productId: "1",
+          name: "Choclillo Premium El Reinal Al Vacío kg",
+          quantity: 1,
+          status: "without_stock",
+          prices: null,
+        },
+      ],
+      totals: rawCart.totals,
+    };
+    const cart = parseCart(raw, "jumbo");
+    expect(cart.items.length).toBe(rawCart.items.length);
+    expect(cart.unavailable).toEqual([
+      {
+        id: "139686",
+        name: "Choclillo Premium El Reinal Al Vacío kg",
+        quantity: 1,
+        status: "without_stock",
+      },
+    ]);
+  });
+
+  it("sin productos sin stock, no agrega el campo", () => {
+    expect(parseCart(rawCart, "jumbo").unavailable).toBeUndefined();
+  });
+});

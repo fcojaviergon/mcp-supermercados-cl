@@ -140,13 +140,13 @@ precio vigente, precio normal, precio socio, **precio por unidad normalizado**
 
 **Núcleo — armar la mejor lista con tu sesión:**
 
-| Tool                       | Qué hace                                                                                                                                                                                                                                                 |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `build_list`               | Convierte una lista en lenguaje natural en productos concretos. Prioriza tus frecuentes, mejor precio por unidad y ofertas. Flags `onlyOffers` / `onlyInStock` y `maxBudget` (ajusta a alternativas más baratas para caber). Incluye resumen formateado. |
-| `suggest_swaps`            | Reemplazos convenientes por precio por unidad. Con `preferNatural`: alternativas de precio similar con menos ingredientes.                                                                                                                               |
-| `get_frequent_purchases`   | Tus productos habituales, con precio Prime (requiere sesión).                                                                                                                                                                                            |
-| `get_saved_lists`          | Tus listas guardadas (requiere sesión).                                                                                                                                                                                                                  |
-| `add_to_cart` / `get_cart` | Prepara el cambio en el carro de Jumbo (`browserSnippet`) y normaliza el carro que devuelve tu navegador: total, ahorro y ahorro Prime. Ver [qué significa `executed`](#flujo-de-sesión-manual-o-automatizado).                                          |
+| Tool                       | Qué hace                                                                                                                                                                                                                                                             |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `build_list`               | Convierte una lista en lenguaje natural en productos concretos. Prioriza tus frecuentes, mejor precio por unidad y ofertas. Flags `onlyOffers` / `onlyInStock` y `maxBudget` (ajusta a alternativas más baratas para caber). Incluye resumen formateado.             |
+| `suggest_swaps`            | Reemplazos convenientes por precio por unidad. Con `preferNatural`: alternativas de precio similar con menos ingredientes.                                                                                                                                           |
+| `get_frequent_purchases`   | Tus productos habituales, con precio Prime (requiere sesión).                                                                                                                                                                                                        |
+| `get_saved_lists`          | Tus listas guardadas (requiere sesión).                                                                                                                                                                                                                              |
+| `add_to_cart` / `get_cart` | Agrega al carro de Jumbo y lee su total, ahorro y ahorro Prime. Con el [puente de sesión](#carro-automático-de-jumbo-puente-de-sesión) lo ejecuta solo; sin él, prepara un `browserSnippet`. Ver [qué significa `executed`](#flujo-de-sesión-manual-o-automatizado). |
 
 **Lectura de catálogo:**
 
@@ -265,12 +265,14 @@ Las tools que requieren sesión (`get_cart`, `get_frequent_purchases`,
 **una sola llamada** para ejecutar en una pestaña ya logueada del sitio. Pasas
 el JSON de vuelta y la tool lo normaliza — el servidor nunca ve tu token.
 
-**Qué significa `executed`.** El servidor no ejecuta nada en la tienda. Sin el
-resultado del navegador, `add_to_cart` responde `executed: false` con el
-request y el snippet: solo **prepara** el cambio. Con `rawCartResult`, responde
-`executed: true` y el carro normalizado: significa que **normalizó el JSON que
-entregó tu navegador**, no que el servidor haya verificado la operación con la
-tienda. La fuente de verdad es el carro que ves en el sitio. Agregar al carro
+**Qué significa `executed`.** Sin el puente de sesión, el servidor no ejecuta
+nada en la tienda. Sin el resultado del navegador, `add_to_cart` responde
+`executed: false` con el request y el snippet: solo **prepara** el cambio. Con
+`rawCartResult`, responde `executed: true, via: "manual"` y el carro
+normalizado: significa que **normalizó el JSON que entregó tu navegador**, no
+que el servidor haya verificado la operación con la tienda. Con el puente de
+sesión responde `executed: true, via: "playwright"`: ahí sí es el carro que
+devolvió Jumbo tras aceptar el cambio. La fuente de verdad es el carro que ves en el sitio. Agregar al carro
 es reversible y **no es una compra**: el pago siempre ocurre en el sitio de la
 tienda. Recomendado para clientes MCP: mostrar al usuario qué va a cambiar (SKU,
 cantidad, sucursal) y que sea él quien ejecute el snippet.
@@ -284,6 +286,41 @@ aparte si lo quieres:
 npm install playwright
 npx playwright install chromium
 ```
+
+#### Carro automático de Jumbo (puente de sesión)
+
+Con el puente de sesión configurado, `add_to_cart`, `get_cart` y
+`discover_branch` se ejecutan solos: el servidor abre un perfil de Chrome
+**dedicado** donde iniciaste sesión una vez, corre ahí los mismos snippets de
+producción y devuelve el carro real. Tu token sigue sin pasar por el servidor
+(vive en el `localStorage` de ese perfil; solo se comprueba que exista).
+`branchId` deja de ser obligatorio: se toma de la tienda elegida en la sesión.
+
+Perfil dedicado y no tu Chrome diario: Playwright toma un lock exclusivo del
+perfil (tendrías que cerrar Chrome) y con un perfil grande ni siquiera llega a
+lanzar. Por eso iniciar sesión ahí es un paso aparte:
+
+```bash
+# Playwright global (sobrevive a npm ci) usando tu Chrome; sin Chrome, baja Chromium:
+PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install -g playwright
+# npx playwright install chromium   # solo si no tienes Google Chrome
+
+# Una vez: abre el perfil dedicado, inicias sesión y eliges tu comuna/tienda.
+SUPERMERCADOS_PLAYWRIGHT_PATH="$(npm root -g)/playwright" npm run session:login
+```
+
+| Variable                           | Requerida    | Descripción                                                                                                          |
+| ---------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------- |
+| `SUPERMERCADOS_SESSION_PROFILE`    | sí           | Carpeta del perfil dedicado. `default` = `~/.supermercados-smoke-profile` (el de `session:login`). Activa el puente. |
+| `SUPERMERCADOS_PLAYWRIGHT_PATH`    | si es global | Carpeta del paquete `playwright` global (`npm root -g` + `/playwright`).                                             |
+| `SUPERMERCADOS_PLAYWRIGHT_CHANNEL` | no           | `chrome` (default), `msedge` o `chromium` (el que baja `playwright install chromium`). Igual que en el login.        |
+| `SUPERMERCADOS_SESSION_HEADLESS`   | no           | `1` para no mostrar la ventana.                                                                                      |
+
+Si el puente falla (sesión vencida, perfil en uso), la tool responde con
+`bridgeError` (qué pasó y qué hacer) y cae al flujo manual con el snippet. Si la
+sesión venció, vuelve a correr `npm run session:login`. No corras
+`npm run test:session` mientras el MCP tiene el perfil abierto: comparten el
+lock.
 
 #### Líder y Tottus: puente automático contra el antibot
 

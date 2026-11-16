@@ -1,9 +1,10 @@
 /**
- * Login inicial del perfil del smoke de sesión (`npm run session:login`).
+ * Login inicial del perfil de sesión (`npm run session:login`).
  *
  * Abre una ventana de Chrome con un perfil DEDICADO —no el tuyo— para que
- * inicies sesión en jumbo.cl una sola vez. La sesión queda persistida ahí y
- * `npm run test:session` la reusa en cada corrida.
+ * inicies sesión en jumbo.cl una sola vez. La sesión queda persistida ahí y la
+ * reusan el puente de sesión del MCP (carro automático, con
+ * SUPERMERCADOS_SESSION_PROFILE) y `npm run test:session`.
  *
  * Por qué un perfil aparte y no el tuyo: `launchPersistentContext` toma el lock
  * exclusivo del perfil, así que usar el de tu Chrome diario obliga a cerrarlo
@@ -15,31 +16,51 @@
  * Chrome. Aquí solo se espera a que el token aparezca en el localStorage del
  * sitio, y se comprueba su existencia, nunca su valor.
  */
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+const DEFAULT_PROFILE = join(homedir(), ".supermercados-smoke-profile");
+const sessionEnv = process.env.SUPERMERCADOS_SESSION_PROFILE?.trim();
 const PROFILE =
+  (sessionEnv && sessionEnv !== "default" ? sessionEnv : undefined) ||
   process.env.SUPERMERCADOS_SMOKE_PROFILE?.trim() ||
-  join(homedir(), ".supermercados-smoke-profile");
-const CHANNEL = process.env.SUPERMERCADOS_PLAYWRIGHT_CHANNEL?.trim() || "chrome";
+  DEFAULT_PROFILE;
+// "chromium" = el Chromium de Playwright (`playwright install chromium`), para
+// máquinas sin Google Chrome. Tiene que coincidir con el del server MCP.
+const channelEnv = process.env.SUPERMERCADOS_PLAYWRIGHT_CHANNEL?.trim() || "chrome";
+const CHANNEL = channelEnv === "chromium" ? undefined : channelEnv;
 const TIMEOUT_MS = 10 * 60_000;
 
 let chromium;
 try {
   ({ chromium } = await import("playwright"));
 } catch {
+  // Playwright global (npm install -g playwright): igual que el server,
+  // se resuelve por ruta explícita porque import() ESM ignora NODE_PATH.
+  const explicit = process.env.SUPERMERCADOS_PLAYWRIGHT_PATH?.trim();
+  if (explicit) {
+    try {
+      ({ chromium } = createRequire(import.meta.url)(explicit));
+    } catch {
+      // cae al mensaje guía.
+    }
+  }
+}
+if (!chromium) {
   console.error(
     "Falta Playwright. Instálalo con:\n\n" +
       "  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --no-save playwright\n\n" +
-      "(se salta la descarga de navegadores porque usamos el Chrome que ya tienes)."
+      "(se salta la descarga de navegadores porque usamos el Chrome que ya tienes).\n" +
+      'Si lo instalaste global, define SUPERMERCADOS_PLAYWRIGHT_PATH="$(npm root -g)/playwright".'
   );
   process.exit(1);
 }
 
-console.log(`Perfil del smoke: ${PROFILE}`);
+console.log(`Perfil de sesión: ${PROFILE}`);
 const ctx = await chromium.launchPersistentContext(PROFILE, {
   headless: false,
-  channel: CHANNEL,
+  ...(CHANNEL ? { channel: CHANNEL } : {}),
   timeout: 60_000,
 });
 
@@ -64,7 +85,9 @@ while (Date.now() < deadline) {
     })()`);
     if (state.token && state.branch) {
       console.log(`\n✅ Sesión detectada. Sucursal: ${state.branch}`);
-      console.log("   Ya puedes correr: npm run test:session");
+      console.log(
+        "   El MCP ya puede operar tu carro (con SUPERMERCADOS_SESSION_PROFILE configurado)."
+      );
       ok = true;
       break;
     }
